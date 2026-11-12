@@ -1,9 +1,10 @@
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback } from "react";
+import { useCallback, useState, type FormEvent } from "react";
 import { MAX_COUNTRIES, type CountryMeta, type IndicatorMeta, type SortOrder } from "@/lib/dashboard";
 import { shortIndicatorName } from "@/lib/format";
+import { MAX_VIEW_NAME_LENGTH, saveView } from "@/lib/saved-views";
 
 type Props = {
   indicators: IndicatorMeta[];
@@ -22,9 +23,23 @@ type Props = {
 const selectClass =
   "rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900";
 
+const buttonClass =
+  "rounded-md border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50";
+const primaryButtonClass = `${buttonClass} border-zinc-900 bg-zinc-900 text-white enabled:hover:bg-zinc-700 dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900 dark:enabled:hover:bg-zinc-300`;
+const secondaryButtonClass = `${buttonClass} border-zinc-300 enabled:hover:bg-zinc-100 dark:border-zinc-700 dark:enabled:hover:bg-zinc-800`;
+
+/** The query string keys that make up a dashboard configuration. */
+const CONFIG_KEYS = ["indicator", "year", "countries", "order", "region"];
+
+type SaveState =
+  | { step: "closed"; savedName?: string }
+  | { step: "naming"; error?: string }
+  | { step: "saving" };
+
 /**
  * Every control writes to the URL query string; the server component re-renders
- * with the new parameters. Nothing is stored in component state.
+ * with the new parameters. The dashboard configuration is never held in component
+ * state; only the transient "save view" form is.
  */
 export function Controls({ indicators, countries, regions, selected, yearOptions }: Props) {
   const router = useRouter();
@@ -42,6 +57,37 @@ export function Controls({ indicators, countries, regions, selected, yearOptions
     },
     [router, pathname, searchParams],
   );
+
+  const [save, setSave] = useState<SaveState>({ step: "closed" });
+  const [viewName, setViewName] = useState("");
+
+  // With no configuration in the URL the dashboard is showing its defaults: nothing to save yet.
+  const hasSelection = CONFIG_KEYS.some((k) => searchParams.has(k));
+
+  const onSave = async (e: FormEvent) => {
+    e.preventDefault();
+    const name = viewName.trim();
+    if (!name) return setSave({ step: "naming", error: "Give the view a name." });
+    if ([...name].length > MAX_VIEW_NAME_LENGTH) {
+      return setSave({ step: "naming", error: `View names can be at most ${MAX_VIEW_NAME_LENGTH} characters.` });
+    }
+    setSave({ step: "saving" });
+    try {
+      const saved = await saveView({
+        name,
+        indicatorCode: selected.indicator,
+        // A view mirrors the URL: without an explicit year it keeps following the latest one.
+        year: searchParams.has("year") ? selected.year : null,
+        countries: selected.countries,
+        order: selected.order,
+        region: selected.region,
+      });
+      setViewName("");
+      setSave({ step: "closed", savedName: saved.name });
+    } catch (err) {
+      setSave({ step: "naming", error: err instanceof Error ? err.message : "The view could not be saved." });
+    }
+  };
 
   const countryName = (code: string) => countries.find((c) => c.code === code)?.name ?? code;
   const addable = countries.filter((c) => !selected.countries.includes(c.code));
@@ -99,7 +145,65 @@ export function Controls({ indicators, countries, regions, selected, yearOptions
             ))}
           </select>
         </label>
+
+        {save.step === "closed" && (
+          <button
+            type="button"
+            className={`${secondaryButtonClass} ml-auto`}
+            disabled={!hasSelection}
+            title={hasSelection ? undefined : "Change the dashboard from its defaults to save it as a view"}
+            onClick={() => setSave({ step: "naming" })}
+          >
+            Save view
+          </button>
+        )}
       </div>
+
+      {save.step !== "closed" && (
+        <form
+          className="flex flex-wrap items-end gap-2"
+          onSubmit={onSave}
+          onKeyDown={(e) => e.key === "Escape" && save.step === "naming" && setSave({ step: "closed" })}
+        >
+          <label className="flex min-w-0 flex-1 basis-64 flex-col gap-1 text-xs text-zinc-500">
+            View name
+            <input
+              type="text"
+              className={`${selectClass} w-full`}
+              value={viewName}
+              onChange={(e) => setViewName(e.target.value)}
+              placeholder="e.g. G7 life expectancy"
+              autoFocus
+              autoComplete="off"
+              disabled={save.step === "saving"}
+              aria-invalid={save.step === "naming" && save.error ? true : undefined}
+              aria-describedby={save.step === "naming" && save.error ? "save-view-error" : undefined}
+            />
+          </label>
+          <button type="submit" className={primaryButtonClass} disabled={save.step === "saving"}>
+            {save.step === "saving" ? "Saving…" : "Save"}
+          </button>
+          <button
+            type="button"
+            className={secondaryButtonClass}
+            disabled={save.step === "saving"}
+            onClick={() => setSave({ step: "closed" })}
+          >
+            Cancel
+          </button>
+          {save.step === "naming" && save.error && (
+            <p id="save-view-error" role="alert" className="basis-full text-xs text-red-700 dark:text-red-400">
+              {save.error}
+            </p>
+          )}
+        </form>
+      )}
+
+      {save.step === "closed" && save.savedName && (
+        <p role="status" className="text-xs text-emerald-700 dark:text-emerald-400">
+          Saved view “{save.savedName}”.
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-zinc-500">Countries</span>
