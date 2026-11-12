@@ -47,7 +47,7 @@ npm run dev                      # starts API (:4000) and web (:3000) with hot r
 cp apps/api/.env.example apps/api/.env          # DATABASE_URL, PORT, CORS_ORIGIN, WORLD_BANK_API_URL
 cp apps/web/.env.example apps/web/.env.local    # GRAPHQL_URL (server-side), NEXT_PUBLIC_GRAPHQL_URL (browser)
 npm run db:migrate               # creates apps/api/prisma/dev.db and applies migrations
-npm run db:seed                  # inserts a few greetings (safe to re-run)
+npm run db:seed                  # inserts a few greetings and example saved views (safe to re-run)
 npm run db:ingest                # pulls ~75k rows from the World Bank API (~10s, safe to re-run)
 ```
 
@@ -66,7 +66,7 @@ Run from the repo root:
 | `npm run typecheck`  | `tsc --noEmit` across both apps                              |
 | `npm run lint`       | ESLint for the web app                                       |
 | `npm run db:migrate` | `prisma migrate dev` (create/apply migrations locally)       |
-| `npm run db:seed`    | Seed the database with greetings                             |
+| `npm run db:seed`    | Seed the database with greetings and example saved views     |
 | `npm run db:ingest`  | Fetch World Bank data into SQLite (`-- --force` to re-fetch) |
 | `npm run db:studio`  | Open Prisma Studio to browse the SQLite data                 |
 
