@@ -1,10 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useState, type FormEvent } from "react";
 import { MAX_COUNTRIES, type CountryMeta, type IndicatorMeta, type SortOrder } from "@/lib/dashboard";
 import { shortIndicatorName } from "@/lib/format";
-import { MAX_VIEW_NAME_LENGTH, saveView } from "@/lib/saved-views";
+import { MAX_VIEW_NAME_LENGTH, saveView, savedViewHref, viewToQuery, type SavedView } from "@/lib/saved-views";
 
 type Props = {
   indicators: IndicatorMeta[];
@@ -18,7 +19,13 @@ type Props = {
     region: string | null;
   };
   yearOptions: number[];
+  /** Every saved view, newest first. */
+  savedViews: SavedView[];
+  /** The saved view the dashboard is currently showing, if it was opened from one. */
+  activeView: SavedView | null;
 };
+
+const chipClass = "inline-flex max-w-56 items-center rounded-full border px-2.5 py-0.5 text-xs";
 
 const selectClass =
   "rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -41,28 +48,40 @@ type SaveState =
  * with the new parameters. The dashboard configuration is never held in component
  * state; only the transient "save view" form is.
  */
-export function Controls({ indicators, countries, regions, selected, yearOptions }: Props) {
+export function Controls({
+  indicators,
+  countries,
+  regions,
+  selected,
+  yearOptions,
+  savedViews,
+  activeView,
+}: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
   const update = useCallback(
     (changes: Record<string, string | null>) => {
-      const next = new URLSearchParams(searchParams.toString());
+      // Changing a control while a saved view is open starts from that view's
+      // configuration and leaves the view: the dashboard no longer matches it.
+      const next = activeView ? viewToQuery(activeView) : new URLSearchParams(searchParams.toString());
+      next.delete("view");
       for (const [k, v] of Object.entries(changes)) {
         if (v === null || v === "") next.delete(k);
         else next.set(k, v);
       }
       router.replace(`${pathname}?${next.toString()}`, { scroll: false });
     },
-    [router, pathname, searchParams],
+    [router, pathname, searchParams, activeView],
   );
 
   const [save, setSave] = useState<SaveState>({ step: "closed" });
   const [viewName, setViewName] = useState("");
 
-  // With no configuration in the URL the dashboard is showing its defaults: nothing to save yet.
-  const hasSelection = CONFIG_KEYS.some((k) => searchParams.has(k));
+  // With no configuration in the URL the dashboard is showing its defaults, or a
+  // saved view as it was saved: either way there is nothing new to save yet.
+  const hasSelection = !activeView && CONFIG_KEYS.some((k) => searchParams.has(k));
 
   const onSave = async (e: FormEvent) => {
     e.preventDefault();
@@ -84,6 +103,8 @@ export function Controls({ indicators, countries, regions, selected, yearOptions
       });
       setViewName("");
       setSave({ step: "closed", savedName: saved.name });
+      // Open the new view: the list picks it up and the dashboard now shows it as the current view.
+      router.replace(savedViewHref(saved), { scroll: false });
     } catch (err) {
       setSave({ step: "naming", error: err instanceof Error ? err.message : "The view could not be saved." });
     }
@@ -94,6 +115,30 @@ export function Controls({ indicators, countries, regions, selected, yearOptions
 
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+      <nav aria-label="Saved views" className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-zinc-500">Saved views</span>
+        {savedViews.length === 0 && <span className="text-xs text-zinc-400">None yet</span>}
+        {savedViews.map((view) => {
+          const isActive = view.id === activeView?.id;
+          return (
+            <Link
+              key={view.id}
+              href={savedViewHref(view)}
+              scroll={false}
+              title={view.name}
+              aria-current={isActive ? "page" : undefined}
+              className={`${chipClass} ${
+                isActive
+                  ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                  : "border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              }`}
+            >
+              <span className="truncate">{view.name}</span>
+            </Link>
+          );
+        })}
+      </nav>
+
       <div className="flex flex-wrap items-end gap-4">
         <label className="flex flex-col gap-1 text-xs text-zinc-500">
           Indicator
@@ -151,7 +196,13 @@ export function Controls({ indicators, countries, regions, selected, yearOptions
             type="button"
             className={`${secondaryButtonClass} ml-auto`}
             disabled={!hasSelection}
-            title={hasSelection ? undefined : "Change the dashboard from its defaults to save it as a view"}
+            title={
+              hasSelection
+                ? undefined
+                : activeView
+                  ? `Already saved as “${activeView.name}”. Change a control to save a new view.`
+                  : "Change the dashboard from its defaults to save it as a view"
+            }
             onClick={() => setSave({ step: "naming" })}
           >
             Save view

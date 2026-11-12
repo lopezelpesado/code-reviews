@@ -1,4 +1,5 @@
 import { gqlFetch } from "@/lib/graphql";
+import { SAVED_VIEW_FIELDS, type SavedView } from "@/lib/saved-views";
 
 /** Indicators that drive the fixed GDP vs life expectancy scatter. */
 export const GDP_PER_CAPITA = "NY.GDP.PCAP.CD";
@@ -40,6 +41,15 @@ export function parseParams(sp: RawSearchParams): DashboardParams {
     order: first(sp.order)?.toUpperCase() === "ASC" ? "ASC" : "DESC",
     region: first(sp.region) || null,
   };
+}
+
+/** The id in `?view=<id>`, which opens a saved view instead of reading the other parameters. */
+export function parseViewId(sp: RawSearchParams): number | null {
+  const raw = first(sp.view);
+  if (raw === undefined) return null;
+  const id = Number(raw);
+  // An unusable id still counts as "asked for a view" so the page can say it was not found.
+  return Number.isInteger(id) && id > 0 ? id : NaN;
 }
 
 // ---------------------------------------------------------------- types
@@ -94,6 +104,8 @@ export type DashboardMeta = {
   dashboardSummary: DashboardSummary;
   indicators: IndicatorMeta[];
   countries: CountryMeta[];
+  /** Newest first. */
+  savedViews: SavedView[];
 };
 
 export type DashboardData = {
@@ -160,6 +172,9 @@ const META_QUERY = /* GraphQL */ `
       code
       name
       region
+    }
+    savedViews {
+      ${SAVED_VIEW_FIELDS}
     }
   }
 `;

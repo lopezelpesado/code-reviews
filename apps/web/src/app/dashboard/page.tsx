@@ -5,11 +5,13 @@ import {
   fetchDashboardData,
   fetchDashboardMeta,
   parseParams,
+  parseViewId,
   toScatterPoints,
   type RawSearchParams,
 } from "@/lib/dashboard";
 import { formatCompact, formatIndicatorValue, shortIndicatorName } from "@/lib/format";
 import { getGraphqlUrl } from "@/lib/graphql";
+import { viewToParams } from "@/lib/saved-views";
 import { StatTile } from "@/components/StatTile";
 import { ChartCard, EmptyChart } from "@/components/charts/ChartCard";
 import { DataTable } from "@/components/charts/DataTable";
@@ -26,7 +28,9 @@ export const metadata = { title: "Dashboard · Code Reviews" };
 type PageProps = { searchParams: Promise<RawSearchParams> };
 
 export default async function DashboardPage({ searchParams }: PageProps) {
-  const params = parseParams(await searchParams);
+  const rawParams = await searchParams;
+  let params = parseParams(rawParams);
+  const viewId = parseViewId(rawParams);
 
   let meta;
   try {
@@ -40,6 +44,21 @@ export default async function DashboardPage({ searchParams }: PageProps) {
         </div>
       </main>
     );
+  }
+
+  // `?view=<id>` opens a saved view: its stored configuration replaces the other parameters.
+  // A view that is gone, or whose indicator is gone, falls back to the default dashboard with a notice.
+  let activeView = viewId == null ? null : (meta.savedViews.find((v) => v.id === viewId) ?? null);
+  let viewNotice: string | null = null;
+  if (viewId != null && !activeView) {
+    viewNotice = "That saved view no longer exists. Showing the default dashboard instead.";
+    params = parseParams({});
+  } else if (activeView && !meta.indicators.some((i) => i.code === activeView?.indicatorCode)) {
+    viewNotice = `The saved view “${activeView.name}” can’t be shown because its indicator (${activeView.indicatorCode}) is no longer in the database. Showing the default dashboard instead.`;
+    activeView = null;
+    params = parseParams({});
+  } else if (activeView) {
+    params = viewToParams(activeView);
   }
 
   const indicator =
@@ -95,8 +114,19 @@ export default async function DashboardPage({ searchParams }: PageProps) {
         <StatTile label="Latest data" value={String(summary.latestYear)} caption="Across all indicators" />
       </div>
 
+      {viewNotice && (
+        <p
+          role="alert"
+          className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200"
+        >
+          {viewNotice}
+        </p>
+      )}
+
       <Suspense>
         <Controls
+          savedViews={meta.savedViews}
+          activeView={activeView}
           indicators={meta.indicators}
           countries={meta.countries}
           regions={meta.dataSummary.regions}

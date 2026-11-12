@@ -191,6 +191,9 @@ export const typeDefs = /* GraphQL */ `
     Countries with no value for any of the indicators are omitted.
     """
     countrySnapshot(indicatorCodes: [String!]!, year: Int!): [CountrySnapshot!]!
+
+    "All saved dashboard views, newest first."
+    savedViews: [SavedView!]!
   }
 
   type Mutation {
@@ -384,6 +387,8 @@ export const resolvers = {
       }
       return [...byCountry.values()];
     },
+
+    savedViews: async () => prisma.savedView.findMany({ orderBy: [{ createdAt: "desc" }, { id: "desc" }] }),
   },
 
   Mutation: {
