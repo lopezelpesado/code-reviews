@@ -65,19 +65,43 @@ const SAVE_VIEW_MUTATION = /* GraphQL */ `
   }
 `;
 
+const DELETE_VIEW_MUTATION = /* GraphQL */ `
+  mutation DeleteView($id: Int!) {
+    deleteView(id: $id) {
+      id
+    }
+  }
+`;
+
 /**
- * Save a dashboard configuration. Rejects with an Error whose message is fit to
- * show to the user (the API's validation message, or a connectivity message).
+ * Run a mutation from the browser. Rejects with an Error whose message is fit to
+ * show to the user: the API's own message, or `unreachable` if the request never got there.
  */
-export async function saveView(input: SaveViewInput): Promise<SavedView> {
+async function mutate<T>(query: string, variables: Record<string, unknown>, unreachable: string): Promise<T> {
   try {
-    const data = await gqlFetch<{ saveView: SavedView }>(SAVE_VIEW_MUTATION, { input });
-    return data.saveView;
+    return await gqlFetch<T>(query, variables);
   } catch (err) {
     // fetch() rejects with a TypeError when the request never reached the API.
-    if (err instanceof TypeError) {
-      throw new Error("Could not reach the server, so the view was not saved. Please try again.");
-    }
+    if (err instanceof TypeError) throw new Error(unreachable);
     throw err;
   }
+}
+
+/** Save a dashboard configuration. Rejects with a user-facing message, e.g. the API's validation message. */
+export async function saveView(input: SaveViewInput): Promise<SavedView> {
+  const data = await mutate<{ saveView: SavedView }>(
+    SAVE_VIEW_MUTATION,
+    { input },
+    "Could not reach the server, so the view was not saved. Please try again.",
+  );
+  return data.saveView;
+}
+
+/** Delete a saved view. Rejects with a user-facing message, e.g. if the view was already deleted. */
+export async function deleteView(id: number): Promise<void> {
+  await mutate<{ deleteView: { id: number } }>(
+    DELETE_VIEW_MUTATION,
+    { id },
+    "Could not reach the server, so the view was not deleted. Please try again.",
+  );
 }

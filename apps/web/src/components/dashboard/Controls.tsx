@@ -5,7 +5,14 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useState, type FormEvent } from "react";
 import { MAX_COUNTRIES, type CountryMeta, type IndicatorMeta, type SortOrder } from "@/lib/dashboard";
 import { shortIndicatorName } from "@/lib/format";
-import { MAX_VIEW_NAME_LENGTH, saveView, savedViewHref, viewToQuery, type SavedView } from "@/lib/saved-views";
+import {
+  MAX_VIEW_NAME_LENGTH,
+  deleteView,
+  saveView,
+  savedViewHref,
+  viewToQuery,
+  type SavedView,
+} from "@/lib/saved-views";
 
 type Props = {
   indicators: IndicatorMeta[];
@@ -25,7 +32,7 @@ type Props = {
   activeView: SavedView | null;
 };
 
-const chipClass = "inline-flex max-w-56 items-center rounded-full border px-2.5 py-0.5 text-xs";
+const chipClass = "inline-flex max-w-56 items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs";
 
 const selectClass =
   "rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -34,9 +41,13 @@ const buttonClass =
   "rounded-md border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50";
 const primaryButtonClass = `${buttonClass} border-zinc-900 bg-zinc-900 text-white enabled:hover:bg-zinc-700 dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900 dark:enabled:hover:bg-zinc-300`;
 const secondaryButtonClass = `${buttonClass} border-zinc-300 enabled:hover:bg-zinc-100 dark:border-zinc-700 dark:enabled:hover:bg-zinc-800`;
+const dangerButtonClass = `${buttonClass} border-red-700 bg-red-700 text-white enabled:hover:bg-red-800 dark:border-red-500 dark:bg-red-500 dark:text-zinc-950 dark:enabled:hover:bg-red-400`;
 
 /** The query string keys that make up a dashboard configuration. */
 const CONFIG_KEYS = ["indicator", "year", "countries", "order", "region"];
+
+/** The view whose deletion is awaiting confirmation (or in flight), with any error from the last attempt. */
+type DeleteState = { view: SavedView; busy: boolean; error?: string } | null;
 
 type SaveState =
   | { step: "closed"; savedName?: string }
@@ -78,6 +89,27 @@ export function Controls({
 
   const [save, setSave] = useState<SaveState>({ step: "closed" });
   const [viewName, setViewName] = useState("");
+  const [del, setDel] = useState<DeleteState>(null);
+
+  const onConfirmDelete = async () => {
+    if (!del) return;
+    const { view } = del;
+    setDel({ view, busy: true });
+    try {
+      await deleteView(view.id);
+      setDel(null);
+      setSave((s) => (s.step === "closed" ? { step: "closed" } : s)); // drop a stale "Saved view …" line
+      if (view.id === activeView?.id) {
+        // Keep showing the same configuration, now as plain parameters rather than a view.
+        router.replace(`${pathname}?${viewToQuery(view).toString()}`, { scroll: false });
+      } else {
+        router.refresh();
+      }
+    } catch (err) {
+      setDel({ view, busy: false, error: err instanceof Error ? err.message : "The view could not be deleted." });
+      router.refresh(); // if it was already deleted elsewhere, the list catches up
+    }
+  };
 
   // With no configuration in the URL the dashboard is showing its defaults, or a
   // saved view as it was saved: either way there is nothing new to save yet.
@@ -121,23 +153,70 @@ export function Controls({
         {savedViews.map((view) => {
           const isActive = view.id === activeView?.id;
           return (
-            <Link
+            <span
               key={view.id}
-              href={savedViewHref(view)}
-              scroll={false}
-              title={view.name}
-              aria-current={isActive ? "page" : undefined}
               className={`${chipClass} ${
                 isActive
                   ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
-                  : "border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  : "border-zinc-300 dark:border-zinc-700"
               }`}
             >
-              <span className="truncate">{view.name}</span>
-            </Link>
+              <Link
+                href={savedViewHref(view)}
+                scroll={false}
+                title={view.name}
+                aria-current={isActive ? "page" : undefined}
+                className="truncate hover:underline"
+              >
+                {view.name}
+              </Link>
+              <button
+                type="button"
+                aria-label={`Delete saved view ${view.name}`}
+                className={
+                  isActive
+                    ? "opacity-60 hover:opacity-100"
+                    : "text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+                }
+                disabled={del?.busy}
+                onClick={() => setDel({ view, busy: false })}
+              >
+                ×
+              </button>
+            </span>
           );
         })}
       </nav>
+
+      {del && (
+        <div
+          role="alertdialog"
+          aria-label="Confirm deleting a saved view"
+          className="flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm dark:border-red-900 dark:bg-red-950"
+          onKeyDown={(e) => e.key === "Escape" && !del.busy && setDel(null)}
+        >
+          <p className="min-w-0 flex-1 basis-64 break-words text-red-900 dark:text-red-200">
+            Delete the saved view “{del.view.name}”? This can’t be undone.
+          </p>
+          <button type="button" className={dangerButtonClass} disabled={del.busy} onClick={onConfirmDelete}>
+            {del.busy ? "Deleting…" : "Delete"}
+          </button>
+          <button
+            type="button"
+            className={secondaryButtonClass}
+            disabled={del.busy}
+            autoFocus
+            onClick={() => setDel(null)}
+          >
+            Cancel
+          </button>
+          {del.error && (
+            <p role="alert" className="basis-full text-xs text-red-700 dark:text-red-400">
+              {del.error}
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-end gap-4">
         <label className="flex flex-col gap-1 text-xs text-zinc-500">

@@ -206,6 +206,12 @@ export const typeDefs = /* GraphQL */ `
     or if the configuration itself is invalid.
     """
     saveView(input: SaveViewInput!): SavedView!
+
+    """
+    Delete a saved view and return it as it was.
+    Fails with a NOT_FOUND error if there is no view with that id, for example because it was already deleted.
+    """
+    deleteView(id: Int!): SavedView!
   }
 `;
 
@@ -444,6 +450,18 @@ export const resolvers = {
       } catch (err) {
         // Two saves with the same name can race past the check above; the unique index catches it.
         if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") throw duplicate;
+        throw err;
+      }
+    },
+
+    deleteView: async (_parent: unknown, args: { id: number }) => {
+      try {
+        return await prisma.savedView.delete({ where: { id: args.id } });
+      } catch (err) {
+        // P2025: the row to delete does not exist.
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
+          throw new GraphQLError("That saved view no longer exists.", { extensions: { code: "NOT_FOUND" } });
+        }
         throw err;
       }
     },
