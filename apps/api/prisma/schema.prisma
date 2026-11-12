@@ -17,6 +17,26 @@ model Greeting {
   createdAt DateTime @default(now())
 }
 
+/// A named dashboard configuration that users can save and reopen.
+/// Shared by everyone using the app; there are no per-user views.
+model SavedView {
+  id            Int      @id @default(autoincrement())
+  /// Display name: trimmed, 1-60 characters (enforced by the API), unique across all views
+  name          String   @unique
+  /// World Bank indicator code, e.g. "NY.GDP.PCAP.CD". Deliberately not a relation to
+  /// Indicator: a view outlives its indicator so that opening it can fail with a message.
+  indicatorCode String
+  /// Year shown on the dashboard; null means "use the indicator's latest year"
+  year          Int?
+  /// Comma-separated ISO 3166-1 alpha-3 codes for the line chart, e.g. "GBR,USA,FRA"
+  countries     String
+  /// Ranking order: "ASC" or "DESC" (validated by the API)
+  order         String
+  /// World Bank region name highlighted on the scatter, if any
+  region        String?
+  createdAt     DateTime @default(now())
+}
+
 /// A country as described by the World Bank API (aggregates such as "World" are excluded).
 model Country {
   /// ISO 3166-1 alpha-3 code, e.g. "GBR"
