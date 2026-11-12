@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { shortIndicatorName } from "@/lib/format";
 import { gqlFetch, getGraphqlUrl } from "@/lib/graphql";
+import { SAVED_VIEW_FIELDS, savedViewHref, type SavedView } from "@/lib/saved-views";
 
 // Always render on request so the page reflects the current DB contents.
 export const dynamic = "force-dynamic";
@@ -29,7 +31,12 @@ type HomeData = {
     lastIngestedAt: string | null;
   };
   indicators: Indicator[];
+  /** Newest first. */
+  savedViews: SavedView[];
 };
+
+/** How many saved views the home page lists before pointing at the dashboard for the rest. */
+const RECENT_VIEWS = 5;
 
 const HOME_QUERY = /* GraphQL */ `
   query Home {
@@ -56,6 +63,9 @@ const HOME_QUERY = /* GraphQL */ `
         max
       }
     }
+    savedViews {
+      ${SAVED_VIEW_FIELDS}
+    }
   }
 `;
 
@@ -79,6 +89,18 @@ function Stat({ label, value }: { label: string; value: string }) {
       <span className="text-2xl font-semibold tabular-nums">{value}</span>
     </div>
   );
+}
+
+/** One-line summary of what a saved view shows, e.g. "GDP per capita · 2020 · 5 countries · lowest first". */
+function describeView(view: SavedView, indicators: Indicator[]): string {
+  const indicator = indicators.find((i) => i.code === view.indicatorCode);
+  return [
+    indicator ? shortIndicatorName(indicator.code, indicator.name) : `${view.indicatorCode} (no longer available)`,
+    view.year ?? "latest year",
+    `${view.countries.length} ${view.countries.length === 1 ? "country" : "countries"}`,
+    view.order === "ASC" ? "lowest first" : "highest first",
+    ...(view.region ? [view.region] : []),
+  ].join(" · ");
 }
 
 export default async function Home() {
@@ -170,6 +192,63 @@ export default async function Home() {
                   Open the dashboard →
                 </Link>
               </p>
+            </>
+          )}
+        </section>
+      )}
+
+      {result.ok && (
+        <section className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="mb-4 flex items-baseline justify-between gap-4">
+            <h2 className="text-lg font-medium">Saved views</h2>
+            {result.data.savedViews.length > 0 && (
+              <span className="text-xs text-zinc-500">
+                {result.data.savedViews.length > RECENT_VIEWS
+                  ? `Latest ${RECENT_VIEWS} of ${result.data.savedViews.length}`
+                  : `${result.data.savedViews.length} saved`}
+              </span>
+            )}
+          </div>
+          {result.data.savedViews.length === 0 ? (
+            <p className="text-zinc-500">
+              No saved views yet. Set up the{" "}
+              <Link href="/dashboard" className="underline underline-offset-4">
+                dashboard
+              </Link>{" "}
+              and choose “Save view”.
+            </p>
+          ) : (
+            <>
+              <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {result.data.savedViews.slice(0, RECENT_VIEWS).map((view) => (
+                  <li key={view.id} className="flex items-baseline justify-between gap-4 py-2">
+                    <div className="min-w-0">
+                      <Link
+                        href={savedViewHref(view)}
+                        className="break-words font-medium underline underline-offset-4"
+                      >
+                        {view.name}
+                      </Link>
+                      <div className="text-xs text-zinc-500">
+                        {describeView(view, result.data.indicators)}
+                      </div>
+                    </div>
+                    <time
+                      dateTime={view.createdAt}
+                      className="shrink-0 font-mono text-xs text-zinc-500"
+                    >
+                      {new Date(view.createdAt).toLocaleString("en-GB")}
+                    </time>
+                  </li>
+                ))}
+              </ul>
+              {result.data.savedViews.length > RECENT_VIEWS && (
+                <p className="mt-4 text-right text-xs text-zinc-500">
+                  <Link href="/dashboard" className="font-medium underline underline-offset-4">
+                    All saved views are on the dashboard →
+                  </Link>
+                </p>
+              )}
             </>
           )}
         </section>

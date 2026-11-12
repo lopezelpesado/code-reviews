@@ -1,5 +1,6 @@
+import { GraphQLError } from "graphql";
 import { createSchema } from "graphql-yoga";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "./db.js";
 
 export const typeDefs = /* GraphQL */ `
@@ -107,6 +108,40 @@ export const typeDefs = /* GraphQL */ `
     DESC
   }
 
+  "A named dashboard configuration that can be saved and reopened. Shared by everyone using the app."
+  type SavedView {
+    id: Int!
+    "Unique display name, at most 60 characters."
+    name: String!
+    "Code of the indicator the dashboard shows. The indicator may since have been removed from the database."
+    indicatorCode: String!
+    "Year shown on the dashboard. Null means the indicator's latest year at the time the view is opened."
+    year: Int
+    "ISO 3166-1 alpha-3 codes of the countries on the line chart, in the order they were saved."
+    countries: [String!]!
+    "Order of the ranking table."
+    order: SortOrder!
+    "World Bank region highlighted on the scatter chart, if any."
+    region: String
+    createdAt: String!
+  }
+
+  "The dashboard configuration to store as a saved view."
+  input SaveViewInput {
+    "Display name. Surrounding whitespace is trimmed; must be 1-60 characters and not already in use."
+    name: String!
+    "Code of an indicator that exists in the database, e.g. NY.GDP.PCAP.CD"
+    indicatorCode: String!
+    "Year to show. Omit or pass null to follow the indicator's latest year."
+    year: Int
+    "Between 1 and 8 ISO 3166-1 alpha-3 country codes for the line chart."
+    countries: [String!]!
+    "Order of the ranking table."
+    order: SortOrder! = DESC
+    "World Bank region to highlight on the scatter chart. Omit or pass null for none."
+    region: String
+  }
+
   type Query {
     "Simple health-check style query that does not touch the database."
     hello: String!
@@ -156,13 +191,47 @@ export const typeDefs = /* GraphQL */ `
     Countries with no value for any of the indicators are omitted.
     """
     countrySnapshot(indicatorCodes: [String!]!, year: Int!): [CountrySnapshot!]!
+
+    "All saved dashboard views, newest first."
+    savedViews: [SavedView!]!
   }
 
   type Mutation {
     "Store a new greeting in the database and return it."
     addGreeting(message: String!): Greeting!
+
+    """
+    Save a dashboard configuration under a name and return it.
+    Fails with a BAD_USER_INPUT error if the name is empty, too long or already taken,
+    or if the configuration itself is invalid.
+    """
+    saveView(input: SaveViewInput!): SavedView!
+
+    """
+    Delete a saved view and return it as it was.
+    Fails with a NOT_FOUND error if there is no view with that id, for example because it was already deleted.
+    """
+    deleteView(id: Int!): SavedView!
   }
 `;
+
+const MAX_VIEW_NAME_LENGTH = 60;
+/** Mirrors MAX_COUNTRIES in the web app's dashboard params. */
+const MAX_VIEW_COUNTRIES = 8;
+
+type SaveViewInput = {
+  name: string;
+  indicatorCode: string;
+  year?: number | null;
+  countries: string[];
+  order: "ASC" | "DESC";
+  region?: string | null;
+};
+
+/** An error whose message is safe and useful to show to the user (Yoga masks plain Errors). */
+function userError(message: string, field?: string): GraphQLError {
+  return new GraphQLError(message, { extensions: { code: "BAD_USER_INPUT", ...(field ? { field } : {}) } });
+}
 
 type YearArgs = { fromYear?: number | null; toYear?: number | null };
 
@@ -324,6 +393,8 @@ export const resolvers = {
       }
       return [...byCountry.values()];
     },
+
+    savedViews: async () => prisma.savedView.findMany({ orderBy: [{ createdAt: "desc" }, { id: "desc" }] }),
   },
 
   Mutation: {
@@ -334,6 +405,71 @@ export const resolvers = {
       }
       return prisma.greeting.create({ data: { message } });
     },
+
+    saveView: async (_parent: unknown, args: { input: SaveViewInput }) => {
+      const { input } = args;
+
+      const name = input.name.trim();
+      if (!name) throw userError("Give the view a name.", "name");
+      // Count code points so an emoji counts as one character, as a user would expect.
+      if ([...name].length > MAX_VIEW_NAME_LENGTH) {
+        throw userError(`View names can be at most ${MAX_VIEW_NAME_LENGTH} characters.`, "name");
+      }
+
+      const indicatorCode = input.indicatorCode.trim();
+      if (!indicatorCode) throw userError("A view needs an indicator.", "indicatorCode");
+
+      if (input.year != null && input.year <= 0) {
+        throw userError("Year must be a positive number.", "year");
+      }
+
+      const countries = [...new Set(input.countries.map((c) => c.trim().toUpperCase()))];
+      if (countries.length === 0) throw userError("A view needs at least one country.", "countries");
+      if (countries.length > MAX_VIEW_COUNTRIES) {
+        throw userError(`A view can have at most ${MAX_VIEW_COUNTRIES} countries.`, "countries");
+      }
+      const badCode = countries.find((c) => !/^[A-Z]{3}$/.test(c));
+      if (badCode !== undefined) {
+        throw userError(`"${badCode}" is not a three-letter country code.`, "countries");
+      }
+
+      const region = input.region?.trim() || null;
+
+      const [indicator, nameTaken] = await Promise.all([
+        prisma.indicator.findUnique({ where: { code: indicatorCode }, select: { code: true } }),
+        prisma.savedView.findUnique({ where: { name }, select: { id: true } }),
+      ]);
+      if (!indicator) throw userError(`There is no indicator with code "${indicatorCode}".`, "indicatorCode");
+      const duplicate = userError(`A view called "${name}" already exists. Choose a different name.`, "name");
+      if (nameTaken) throw duplicate;
+
+      try {
+        return await prisma.savedView.create({
+          data: { name, indicatorCode, year: input.year ?? null, countries: countries.join(","), order: input.order, region },
+        });
+      } catch (err) {
+        // Two saves with the same name can race past the check above; the unique index catches it.
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") throw duplicate;
+        throw err;
+      }
+    },
+
+    deleteView: async (_parent: unknown, args: { id: number }) => {
+      try {
+        return await prisma.savedView.delete({ where: { id: args.id } });
+      } catch (err) {
+        // P2025: the row to delete does not exist.
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
+          throw new GraphQLError("That saved view no longer exists.", { extensions: { code: "NOT_FOUND" } });
+        }
+        throw err;
+      }
+    },
+  },
+
+  SavedView: {
+    countries: (parent: { countries: string }) => parent.countries.split(",").filter(Boolean),
+    createdAt: (parent: { createdAt: Date }) => parent.createdAt.toISOString(),
   },
 
   Greeting: {
